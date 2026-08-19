@@ -90,14 +90,47 @@ def polite_delay() -> None:
     _last_request_monotonic[0] = time.monotonic()
 
 
-def discover_catalogue() -> tuple[list[str], list[str], int]:
+def extract_book(html: str, product_url: str, source_page: str) -> dict:
+    """Pull the eight raw fields out of one book detail page."""
+    soup = BeautifulSoup(html, "html.parser")
+    product_main = soup.select_one("div.product_main")
+
+    title = product_main.select_one("h1").get_text(strip=True) if product_main else None
+    price_el = product_main.select_one("p.price_color") if product_main else None
+    price_text = price_el.get_text(strip=True) if price_el else None
+    avail_el = (
+        product_main.select_one("p.instock.availability") if product_main else None
+    )
+    availability_text = (
+        avail_el.get_text(" ", strip=True) if avail_el else None
+    )
+    rating_el = product_main.select_one("p.star-rating") if product_main else None
+    rating_classes = rating_el.get("class", []) if rating_el else []
+    rating_text = rating_classes[1] if len(rating_classes) > 1 else None
+    desc_el = soup.select_one("div#product_description ~ p")
+    description = desc_el.get_text(strip=True) if desc_el else None
+
+    return {
+        "title": title,
+        "product_url": product_url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": now_iso(),
+    }
+
+
+def discover_catalogue() -> tuple[list[str], list[tuple[str, str]], int]:
     """Follow the catalogue's own 'next' links from page 1.
 
-    Returns (catalogue_urls, book_urls, cache_hits). Stops after three pages.
-    Book URLs are resolved to absolute form and deduplicated in order.
+    Returns (catalogue_urls, book_pages, cache_hits). Stops after three pages.
+    book_pages is a list of (book_url, source_page_url) pairs, deduplicated
+    by book URL in discovery order.
     """
     catalogue_urls: list[str] = []
-    book_urls: list[str] = []
+    book_pages: list[tuple[str, str]] = []
     cache_hits = 0
     page_url = FIRST_CATALOGUE_PAGE
 
@@ -109,12 +142,14 @@ def discover_catalogue() -> tuple[list[str], list[str], int]:
         for anchor in soup.select("article.product_pod h3 a"):
             href = anchor.get("href")
             if href:
-                book_urls.append(urljoin(page_url, href))
+                book_pages.append((urljoin(page_url, href), page_url))
         next_link = soup.select_one("li.next a")
         page_url = urljoin(page_url, next_link.get("href")) if next_link else None
 
-    unique = list(dict.fromkeys(book_urls))
-    return catalogue_urls, unique, cache_hits
+    unique: dict[str, str] = {}
+    for book_url, source_page in book_pages:
+        unique.setdefault(book_url, source_page)
+    return catalogue_urls, list(unique.items()), cache_hits
 
 
 def fetch(url: str, retries: int = 1) -> tuple[str, bool]:
@@ -140,6 +175,7 @@ def fetch(url: str, retries: int = 1) -> tuple[str, bool]:
             raise FetchError(f"request failed after {attempt} attempts: {exc}") from exc
 
         if resp.status_code == 200:
+            resp.encoding = "utf-8"
             break
         if resp.status_code in NO_RETRY_STATUS:
             raise FetchError(f"HTTP {resp.status_code} (not retried)")
@@ -167,10 +203,21 @@ def main() -> None:
 
     print(f"TARGET {BASE_URL}")
 
-    catalogue_urls, book_links, cache_hits = discover_catalogue()
+    catalogue_urls, book_pages, catalogue_cache_hits = discover_catalogue()
     print(f"catalogue_pages={len(catalogue_urls)} "
-          f"discovered={len(book_links)} "
-          f"unique_urls={len(set(book_links))}")
+          f"discovered={len(book_pages)} "
+          f"unique_urls={len(book_pages)}")
+
+    raw_records: list[dict] = []
+    detail_cache_hits = 0
+    for book_url, source_page in book_pages:
+        html, cached = fetch(book_url)
+        detail_cache_hits += 1 if cached else 0
+        raw_records.append(extract_book(html, book_url, source_page))
+
+    print(f"detail_pages={len(raw_records)}")
+    print("sample raw record:")
+    print(json.dumps(raw_records[0], indent=2))
 
 
 if __name__ == "__main__":
