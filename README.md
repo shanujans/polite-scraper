@@ -65,6 +65,27 @@ One broken page is logged and skipped — the other 59 survive and the run still
 finishes. `output/run-report.json` records `failed_pages`, cache hits, valid and
 invalid records, and duration.
 
+## Sample run report
+
+```json
+{
+  "start_time": "2026-08-20T18:26:54.611471Z",
+  "finished_at": "2026-08-20T18:26:55.212964Z",
+  "duration_seconds": 0.61,
+  "pages_fetched": 3,
+  "cache_hits": 63,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 0,
+  "target": "https://books.toscrape.com",
+  "user_agent": "FlyRankInternship-A9/1.0 (+https://github.com/shanujans/be05-polite-scraper)"
+}
+```
+
+A fresh run that hits the network reports `cache_hits: 0` and takes a few
+minutes (60 detail pages at 0.5 s apart); re-runs read from cache and finish in
+under a second.
+
 ## Why this needed no browser
 
 The data is already in the HTML the server sends — prices, availability, ratings,
@@ -84,3 +105,12 @@ sandbox that exists for this purpose — and asks it for the minimum, slowly, on
 the mapping stays in the raw value rather than being guessed into a star count.
 The price normaliser only handles the `£1,234.56` format Books to Scrape uses;
 a site with a different currency format would need a different normaliser.
+
+## Verify failure handling (optional)
+
+```bash
+python src/main.py --include-bad-url
+```
+
+Adds one made-up book URL to the list on purpose. The run finishes, the 60 good
+records survive, and `output/run-report.json` shows `failed_pages: 1`.
