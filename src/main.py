@@ -90,6 +90,20 @@ def polite_delay() -> None:
     _last_request_monotonic[0] = time.monotonic()
 
 
+def normalize_price(price_text: str | None) -> float | None:
+    """Turn '£51.77' (or '£1,299.00') into the number 51.77."""
+    if not price_text:
+        return None
+    match = re.search(r"[\d,.]+", price_text)
+    if not match:
+        return None
+    cleaned = match.group().replace(",", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
 def extract_book(html: str, product_url: str, source_page: str) -> dict:
     """Pull the eight raw fields out of one book detail page."""
     soup = BeautifulSoup(html, "html.parser")
@@ -216,8 +230,31 @@ def main() -> None:
         raw_records.append(extract_book(html, book_url, source_page))
 
     print(f"detail_pages={len(raw_records)}")
-    print("sample raw record:")
-    print(json.dumps(raw_records[0], indent=2))
+
+    valid_records: list[dict] = []
+    errors: list[dict] = []
+    for raw in raw_records:
+        raw["price_gbp"] = normalize_price(raw["price_text"])
+        try:
+            record = BookRecord(**raw)
+        except ValidationError as exc:
+            errors.append(
+                {"url": raw["product_url"], "reason": str(exc)}
+            )
+            continue
+        valid_records.append(record.model_dump())
+
+    valid_records.sort(key=lambda record: record["product_url"])
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUTPUT_DIR / "books.json").write_text(
+        json.dumps(valid_records, indent=2), encoding="utf-8"
+    )
+    (OUTPUT_DIR / "errors.json").write_text(
+        json.dumps(errors, indent=2), encoding="utf-8"
+    )
+    print(f"valid_records={len(valid_records)}")
+    print(f"invalid_records={len(errors)}")
+    print(f"wrote output/books.json ({len(valid_records)} records)")
 
 
 if __name__ == "__main__":
