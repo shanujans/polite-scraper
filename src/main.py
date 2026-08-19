@@ -9,6 +9,7 @@ validate -> store -> report.
 """
 
 import argparse
+import csv
 import hashlib
 import json
 import re
@@ -105,9 +106,15 @@ def normalize_price(price_text: str | None) -> float | None:
 
 
 def extract_book(html: str, product_url: str, source_page: str) -> dict:
-    """Pull the eight raw fields out of one book detail page."""
+    """Pull the eight raw fields out of one book detail page.
+
+    Raises ValueError if the page lacks the expected product area — a
+    200 response with malformed HTML counts as a failed page, not a record.
+    """
     soup = BeautifulSoup(html, "html.parser")
     product_main = soup.select_one("div.product_main")
+    if product_main is None:
+        raise ValueError("page missing div.product_main")
 
     title = product_main.select_one("h1").get_text(strip=True) if product_main else None
     price_el = product_main.select_one("p.price_color") if product_main else None
@@ -160,10 +167,15 @@ def discover_catalogue() -> tuple[list[str], list[tuple[str, str]], int]:
         next_link = soup.select_one("li.next a")
         page_url = urljoin(page_url, next_link.get("href")) if next_link else None
 
+    return catalogue_urls, dedupe_book_pages(book_pages), cache_hits
+
+
+def dedupe_book_pages(book_pages: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Deduplicate (book_url, source_page) pairs, keeping first source_page."""
     unique: dict[str, str] = {}
     for book_url, source_page in book_pages:
         unique.setdefault(book_url, source_page)
-    return catalogue_urls, list(unique.items()), cache_hits
+    return list(unique.items())
 
 
 def fetch(url: str, retries: int = 1) -> tuple[str, bool]:
@@ -203,12 +215,36 @@ def fetch(url: str, retries: int = 1) -> tuple[str, bool]:
     return resp.text, False
 
 
+def write_csv(records: list[dict]) -> None:
+    """Flatten validated records into output/books.csv.
+
+    The record is already flat (no nested objects or lists), so nothing needs
+    to be collapsed; the description is the only field that can contain commas
+    and is quoted by the csv module.
+    """
+    fields = [
+        "title", "product_url", "price_text", "price_gbp",
+        "availability_text", "rating_text", "description",
+        "source_page", "fetched_at",
+    ]
+    with (OUTPUT_DIR / "books.csv").open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({field: record.get(field) for field in fields})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--include-bad-url",
         action="store_true",
         help="add a deliberately broken book URL to prove failure handling",
+    )
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="also export validated records to output/books.csv",
     )
     args = parser.parse_args()
 
@@ -242,7 +278,11 @@ def main() -> None:
             failed_pages += 1
             continue
         detail_cache_hits += 1 if cached else 0
-        raw_records.append(extract_book(html, book_url, source_page))
+        try:
+            raw_records.append(extract_book(html, book_url, source_page))
+        except ValueError as exc:
+            print(f"SKIP {book_url} — malformed page: {exc}")
+            failed_pages += 1
 
     print(f"detail_pages={len(raw_records)}")
     print(f"failed_pages={failed_pages}")
@@ -271,6 +311,9 @@ def main() -> None:
     print(f"valid_records={len(valid_records)}")
     print(f"invalid_records={len(errors)}")
     print(f"wrote output/books.json ({len(valid_records)} records)")
+    if args.csv:
+        write_csv(valid_records)
+        print("wrote output/books.csv")
 
     report = {
         "start_time": start_time,
