@@ -114,3 +114,75 @@ python src/main.py --include-bad-url
 
 Adds one made-up book URL to the list on purpose. The run finishes, the 60 good
 records survive, and `output/run-report.json` shows `failed_pages: 1`.
+
+## AI vs me (bonus rematch)
+
+The bonus stage: I wrote the spec, asked an AI to build the same pipeline in
+quarantine (`ai-version/`), ran it against my own checkpoints, then improved my
+prompt and regenerated once (`ai-version/rematch/`).
+
+### My prompt (round 2, after the first rematch)
+
+> Target: https://books.toscrape.com/, first 3 catalogue pages. Do NOT hardcode
+> the 3 page URLs — start at page-1.html, follow the catalogue's own "next" link
+> and stop after exactly 3 pages. Discover the 60 unique book URLs (urljoin, never
+> string glue, dedupe). Extract 8 raw fields per book (title, product_url,
+> price_text, availability_text, rating_text, description [nullable], source_page,
+> fetched_at). Clean schema: add price_gbp as a float via Pydantic; failing records
+> go to errors.json, never books.json. Politeness: honest user-agent, 10s timeout,
+> >=0.5s delay, cache every page and reuse on re-runs, only HTTP 200 parsed.
+> Idempotency: two runs → same 60 records. Failure handling: per-page try/except,
+> one broken page skipped; never retry 404/403, retry once on timeout/5xx.
+> Add `--include-bad-url` flag that injects one 404 URL and must still finish with
+> failed_pages=1. Run report: start/end time, duration, pages, cache hits, valid,
+> invalid, failed_pages (an integer count). Python 3.10+, decode responses as UTF-8.
+
+### Checkpoint results
+
+| Checkpoint | Mine | AI (round 1) | AI (round 2) |
+|------------|------|--------------|--------------|
+| Discovers 60 unique URLs | ✅ | ✅ | ✅ |
+| All 8 raw fields + price_gbp | ✅ | ✅ | ✅ |
+| Idempotent (2 runs → 60, not 120) | ✅ | ✅ (byte-identical) | ✅ |
+| One broken page skipped, run survives | ✅ | ✅ | ✅ |
+| `failed_pages` reported as a count | ✅ | ❌ (list of URLs) | ✅ |
+| Follows site's own "next" links | ✅ | ❌ (hardcoded 3 URLs) | ✅ |
+
+### What the AI did better — and do I understand it?
+
+- **Byte-identical re-runs.** The AI cached `fetched_at` *with* the HTML, so a
+  cache hit returns the original timestamp and two runs produce identical files.
+  Mine re-stamps `fetched_at` on every run, so the field differs run to run. I
+  understand the code and I'd actually call this a wash: the assignment's
+  idempotency test only requires the same 60 records, but the AI's approach is
+  the more defensible "don't lie about when you fetched it" behaviour.
+- **Non-zero exit code when pages failed** — tiny, sensible, I understand it.
+
+### What it got wrong or silently skipped
+
+- Round 1 **hardcoded the 3 catalogue page URLs** instead of following the site's
+  `next` links. It worked today because the site didn't change, but it would break
+  silently the day the site reorders pages. My round-2 prompt called this out
+  explicitly, and the AI fixed it.
+- Round 1 reported `failed_pages` as a **list of URLs**, not the count the spec
+  asks for. Again, my round-2 prompt fixed it by saying "an integer count".
+- Round 1 had **no failure-injection test** — it *handled* broken pages but I had
+  to ask for a way to *prove* it. My prompt added `--include-bad-url`.
+
+### What my prompt forgot to say
+
+- I never specified the **exit code** convention or that `errors.json` should hold
+  only schema failures (not page-level 404s). The AI made reasonable judgment
+  calls here that I agree with.
+- I said "cache every page" but didn't say **what a cache hit should return for
+  `fetched_at`** — the AI chose to freeze the original timestamp, which changed
+  the observable output. A better prompt names the exact contract.
+
+### One rematch
+
+Round 1 → round 2 changed: hardcoded page list → follow `next` links;
+`failed_pages` list → integer count; added `--include-bad-url`. Both rounds
+collected 60 records and survived a broken page, which tells me the core spec was
+clear — the differences were all in details I hadn't pinned down, and once I wrote
+them into the prompt they disappeared. The skill is writing the prompt that leaves
+nothing to guess.

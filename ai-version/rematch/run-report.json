@@ -1,0 +1,12 @@
+{
+  "start_time": "2026-08-20T18:56:44.364242+00:00",
+  "finished_at": "2026-08-20T18:56:46.803045+00:00",
+  "duration_seconds": 2.439,
+  "pages_fetched": 1,
+  "cache_hits": 63,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 1,
+  "target": "https://books.toscrape.com/",
+  "user_agent": "FlyRankInternship-A9/1.0 (+https://github.com/shanujans/be05-polite-scraper)"
+}
