@@ -90,6 +90,33 @@ def polite_delay() -> None:
     _last_request_monotonic[0] = time.monotonic()
 
 
+def discover_catalogue() -> tuple[list[str], list[str], int]:
+    """Follow the catalogue's own 'next' links from page 1.
+
+    Returns (catalogue_urls, book_urls, cache_hits). Stops after three pages.
+    Book URLs are resolved to absolute form and deduplicated in order.
+    """
+    catalogue_urls: list[str] = []
+    book_urls: list[str] = []
+    cache_hits = 0
+    page_url = FIRST_CATALOGUE_PAGE
+
+    while page_url and len(catalogue_urls) < MAX_CATALOGUE_PAGES:
+        catalogue_urls.append(page_url)
+        html, cached = fetch(page_url)
+        cache_hits += 1 if cached else 0
+        soup = BeautifulSoup(html, "html.parser")
+        for anchor in soup.select("article.product_pod h3 a"):
+            href = anchor.get("href")
+            if href:
+                book_urls.append(urljoin(page_url, href))
+        next_link = soup.select_one("li.next a")
+        page_url = urljoin(page_url, next_link.get("href")) if next_link else None
+
+    unique = list(dict.fromkeys(book_urls))
+    return catalogue_urls, unique, cache_hits
+
+
 def fetch(url: str, retries: int = 1) -> tuple[str, bool]:
     """Fetch a page, caching it after the first real request.
 
@@ -139,9 +166,11 @@ def main() -> None:
     start_time = now_iso()
 
     print(f"TARGET {BASE_URL}")
-    html, cached = fetch(FIRST_CATALOGUE_PAGE)
-    verb = "CACHE HIT" if cached else "FETCH"
-    print(f"{verb} {FIRST_CATALOGUE_PAGE} ({len(html.encode('utf-8'))} bytes)")
+
+    catalogue_urls, book_links, cache_hits = discover_catalogue()
+    print(f"catalogue_pages={len(catalogue_urls)} "
+          f"discovered={len(book_links)} "
+          f"unique_urls={len(set(book_links))}")
 
 
 if __name__ == "__main__":
