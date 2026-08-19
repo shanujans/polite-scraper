@@ -224,12 +224,28 @@ def main() -> None:
 
     raw_records: list[dict] = []
     detail_cache_hits = 0
+    failed_pages = 0
+    book_pages = list(book_pages)
+    if args.include_bad_url:
+        book_pages.append(
+            (
+                "https://books.toscrape.com/catalogue/this-book-does-not-exist_99999/"
+                "index.html",
+                FIRST_CATALOGUE_PAGE,
+            )
+        )
     for book_url, source_page in book_pages:
-        html, cached = fetch(book_url)
+        try:
+            html, cached = fetch(book_url)
+        except FetchError as exc:
+            print(f"SKIP {book_url} — {exc}")
+            failed_pages += 1
+            continue
         detail_cache_hits += 1 if cached else 0
         raw_records.append(extract_book(html, book_url, source_page))
 
     print(f"detail_pages={len(raw_records)}")
+    print(f"failed_pages={failed_pages}")
 
     valid_records: list[dict] = []
     errors: list[dict] = []
@@ -255,6 +271,26 @@ def main() -> None:
     print(f"valid_records={len(valid_records)}")
     print(f"invalid_records={len(errors)}")
     print(f"wrote output/books.json ({len(valid_records)} records)")
+
+    report = {
+        "start_time": start_time,
+        "finished_at": now_iso(),
+        "duration_seconds": round(time.monotonic() - start_monotonic, 2),
+        "pages_fetched": len(catalogue_urls),
+        "cache_hits": catalogue_cache_hits + detail_cache_hits,
+        "valid_records": len(valid_records),
+        "invalid_records": len(errors),
+        "failed_pages": failed_pages,
+        "target": BASE_URL,
+        "user_agent": USER_AGENT,
+    }
+    (OUTPUT_DIR / "run-report.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+    print(f"wrote output/run-report.json "
+          f"(duration={report['duration_seconds']}s, "
+          f"cache_hits={report['cache_hits']}, "
+          f"failed_pages={report['failed_pages']})")
 
 
 if __name__ == "__main__":
